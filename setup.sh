@@ -6,6 +6,60 @@ DOTFILES_DIR="$HOME/.src/dotfiles"
 CONFIG_TARGET="$HOME/.config"
 SCRIPTS_DIR="$DOTFILES_DIR/scripts"
 
+# === FUNCTION: Check for quit ===
+check_quit() {
+    local input="$1"
+    if [[ "$input" =~ ^[Qq]$ ]] || [[ "$input" =~ ^[Qq][Uu][Ii][Tt]$ ]]; then
+        echo "👋 Exiting setup. No changes were made."
+        exit 0
+    fi
+}
+
+# === FUNCTION: Setup menu ===
+setup_menu() {
+    echo "🚀 Dotfiles Setup Configuration"
+    echo "================================"
+    echo "What would you like to set up?"
+    echo ""
+    echo "1. 📦 Install packages (essential tools)"
+    echo "2. 🔧 Configure Git (name, email, GPG signing)"
+    echo "3. 🔑 Set up SSH key for GitHub"
+    echo "4. 📂 Initialize/setup dotfiles repository"
+    echo "5. 🔍 Import existing configurations"
+    echo "6. 🔗 Create symlinks"
+    echo "7. 🌟 Complete setup (all of the above)"
+    echo "q. 🚪 Quit"
+    echo ""
+    read -p "Enter your choices (e.g., 1,3,5 or 7 for all, q to quit): " SETUP_CHOICES
+    echo ""
+    
+    check_quit "$SETUP_CHOICES"
+    
+    # Parse choices
+    INSTALL_PACKAGES=false
+    SETUP_GIT=false
+    SETUP_SSH=false
+    SETUP_REPO=false
+    IMPORT_CONFIGS=false
+    CREATE_SYMLINKS=false
+    
+    if [[ "$SETUP_CHOICES" == *"7"* ]]; then
+        INSTALL_PACKAGES=true
+        SETUP_GIT=true
+        SETUP_SSH=true
+        SETUP_REPO=true
+        IMPORT_CONFIGS=true
+        CREATE_SYMLINKS=true
+    else
+        [[ "$SETUP_CHOICES" == *"1"* ]] && INSTALL_PACKAGES=true
+        [[ "$SETUP_CHOICES" == *"2"* ]] && SETUP_GIT=true
+        [[ "$SETUP_CHOICES" == *"3"* ]] && SETUP_SSH=true
+        [[ "$SETUP_CHOICES" == *"4"* ]] && SETUP_REPO=true
+        [[ "$SETUP_CHOICES" == *"5"* ]] && IMPORT_CONFIGS=true
+        [[ "$SETUP_CHOICES" == *"6"* ]] && CREATE_SYMLINKS=true
+    fi
+}
+
 # === FUNCTION: Detect OS ===
 detect_os() {
     if [ -f /etc/os-release ]; then
@@ -109,16 +163,19 @@ setup_git() {
         echo "✅ Git already configured:"
         echo "   Name: $(git config --global user.name)"
         echo "   Email: $(git config --global user.email)"
-        read -p "Do you want to reconfigure? (y/N): " -n 1 -r
+        read -p "Do you want to reconfigure? (y/N/q to quit): " -n 1 -r
         echo
+        check_quit "$REPLY"
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
             return
         fi
     fi
     
     # Prompt for git configuration
-    read -p "Enter your Git name: " GIT_NAME
-    read -p "Enter your Git email: " GIT_EMAIL
+    read -p "Enter your Git name (q to quit): " GIT_NAME
+    check_quit "$GIT_NAME"
+    read -p "Enter your Git email (q to quit): " GIT_EMAIL
+    check_quit "$GIT_EMAIL"
     
     git config --global user.name "$GIT_NAME"
     git config --global user.email "$GIT_EMAIL"
@@ -128,11 +185,175 @@ setup_git() {
     echo "   Email: $GIT_EMAIL"
     
     # Ask about GPG signing
-    read -p "Do you want to set up GPG commit signing? (y/N): " -n 1 -r
+    read -p "Do you want to set up GPG commit signing? (y/N/q to quit): " -n 1 -r
     echo
+    check_quit "$REPLY"
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         setup_gpg "$GIT_NAME" "$GIT_EMAIL"
     fi
+}
+
+# === FUNCTION: Setup SSH key ===
+setup_ssh_key() {
+    echo "🔑 Setting up SSH key for GitHub..."
+    
+    SSH_KEY_PATH="$HOME/.ssh/id_ed25519"
+    
+    if [ -f "$SSH_KEY_PATH" ]; then
+        echo "✅ SSH key already exists at $SSH_KEY_PATH"
+        echo "📋 Your public key (copy this to GitHub > Settings > SSH Keys):"
+        echo "https://github.com/settings/keys"
+        echo ""
+        cat "$SSH_KEY_PATH.pub"
+        echo ""
+        read -p "Press Enter after you've added the SSH key to GitHub (or 'q' to quit)... " CONTINUE_SSH
+        check_quit "$CONTINUE_SSH"
+        return
+    fi
+    
+    # Get email for SSH key
+    if git config --global user.email >/dev/null 2>&1; then
+        GIT_EMAIL=$(git config --global user.email)
+        echo "Using Git email: $GIT_EMAIL"
+        read -p "Press Enter to continue or 'q' to quit: " CONTINUE_CHOICE
+        check_quit "$CONTINUE_CHOICE"
+    else
+        read -p "Enter your email for the SSH key (q to quit): " GIT_EMAIL
+        check_quit "$GIT_EMAIL"
+    fi
+    
+    echo "🔐 Generating SSH key..."
+    ssh-keygen -t ed25519 -C "$GIT_EMAIL" -f "$SSH_KEY_PATH" -N ""
+    
+    # Start SSH agent and add key
+    eval "$(ssh-agent -s)" >/dev/null 2>&1
+    ssh-add "$SSH_KEY_PATH" >/dev/null 2>&1
+    
+    echo "✅ SSH key generated!"
+    echo ""
+    echo "📋 Your public key (copy this to GitHub > Settings > SSH Keys):"
+    echo "https://github.com/settings/keys"
+    echo ""
+    cat "$SSH_KEY_PATH.pub"
+    echo ""
+    read -p "Press Enter after you've added the SSH key to GitHub (or 'q' to quit)... " CONTINUE_SSH
+    check_quit "$CONTINUE_SSH"
+    
+    # Test SSH connection
+    echo "🧪 Testing SSH connection to GitHub..."
+    if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+        echo "✅ SSH connection to GitHub successful!"
+    else
+        echo "⚠️  SSH test failed, but this might be normal. Try the connection later."
+    fi
+}
+
+# === FUNCTION: Discover and import existing configs ===
+discover_and_import_configs() {
+    echo "🔍 Discovering existing configuration files..."
+    
+    # Define config locations to check
+    declare -A CONFIG_LOCATIONS=(
+        ["$HOME/.bashrc"]="$DOTFILES_DIR/.bashrc"
+        ["$HOME/.bash_aliases"]="$DOTFILES_DIR/.bash_aliases"
+        ["$HOME/.bash_profile"]="$DOTFILES_DIR/.bash_profile"
+        ["$HOME/.profile"]="$DOTFILES_DIR/.profile"
+        ["$HOME/.tmux.conf"]="$DOTFILES_DIR/.tmux.conf"
+        ["$HOME/.vimrc"]="$DOTFILES_DIR/.vimrc"
+        ["$HOME/.zshrc"]="$DOTFILES_DIR/.zshrc"
+        ["$HOME/.gitconfig"]="$DOTFILES_DIR/.gitconfig"
+        ["$CONFIG_TARGET/starship.toml"]="$DOTFILES_DIR/.config/starship.toml"
+        ["$CONFIG_TARGET/nvim"]="$DOTFILES_DIR/.config/nvim"
+        ["$CONFIG_TARGET/git"]="$DOTFILES_DIR/.config/git"
+        ["$CONFIG_TARGET/tmux"]="$DOTFILES_DIR/.config/tmux"
+        ["$CONFIG_TARGET/alacritty"]="$DOTFILES_DIR/.config/alacritty"
+        ["$CONFIG_TARGET/kitty"]="$DOTFILES_DIR/.config/kitty"
+        ["$CONFIG_TARGET/wezterm"]="$DOTFILES_DIR/.config/wezterm"
+        ["$CONFIG_TARGET/fish"]="$DOTFILES_DIR/.config/fish"
+        ["$CONFIG_TARGET/zsh"]="$DOTFILES_DIR/.config/zsh"
+    )
+    
+    found_configs=()
+    
+    # Check each location for non-empty configs
+    for source_path in "${!CONFIG_LOCATIONS[@]}"; do
+        dest_path="${CONFIG_LOCATIONS[$source_path]}"
+        
+        if [ -f "$source_path" ] && [ -s "$source_path" ]; then
+            # It's a non-empty file
+            if [ ! -e "$dest_path" ]; then
+                found_configs+=("$source_path|$dest_path|file")
+            fi
+        elif [ -d "$source_path" ] && [ "$(ls -A "$source_path" 2>/dev/null)" ]; then
+            # It's a non-empty directory
+            if [ ! -e "$dest_path" ]; then
+                found_configs+=("$source_path|$dest_path|dir")
+            fi
+        fi
+    done
+    
+    if [ ${#found_configs[@]} -eq 0 ]; then
+        echo "✅ No existing configurations found to import."
+        return
+    fi
+    
+    echo "📋 Found ${#found_configs[@]} existing configuration(s):"
+    for i in "${!found_configs[@]}"; do
+        IFS='|' read -r source dest type <<< "${found_configs[$i]}"
+        if [ "$type" = "file" ]; then
+            size=$(wc -l < "$source" 2>/dev/null || echo "?")
+            echo "   $((i+1)). $source ($size lines)"
+        else
+            count=$(find "$source" -type f 2>/dev/null | wc -l)
+            echo "   $((i+1)). $source/ ($count files)"
+        fi
+    done
+    echo ""
+    
+    read -p "Enter numbers to import (e.g., 1,3,4 or 'all' for everything, 'q' to quit): " IMPORT_CHOICE
+    echo ""
+    
+    check_quit "$IMPORT_CHOICE"
+    
+    if [ "$IMPORT_CHOICE" = "all" ]; then
+        SELECTED_CONFIGS=("${found_configs[@]}")
+    else
+        SELECTED_CONFIGS=()
+        IFS=',' read -ra CHOICES <<< "$IMPORT_CHOICE"
+        for choice in "${CHOICES[@]}"; do
+            choice=$(echo "$choice" | tr -d ' ')  # Remove spaces
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#found_configs[@]} ]; then
+                SELECTED_CONFIGS+=("${found_configs[$((choice-1))]}")
+            fi
+        done
+    fi
+    
+    if [ ${#SELECTED_CONFIGS[@]} -eq 0 ]; then
+        echo "⏭️  No configurations selected for import."
+        return
+    fi
+    
+    echo "📥 Importing ${#SELECTED_CONFIGS[@]} selected configuration(s)..."
+    mkdir -p "$DOTFILES_DIR/.config"
+    
+    for config in "${SELECTED_CONFIGS[@]}"; do
+        IFS='|' read -r source dest type <<< "$config"
+        
+        # Create destination directory
+        dest_dir=$(dirname "$dest")
+        mkdir -p "$dest_dir"
+        
+        if [ "$type" = "file" ]; then
+            echo "📄 Importing: $source → $dest"
+            cp "$source" "$dest"
+        else
+            echo "📁 Importing: $source/ → $dest/"
+            cp -r "$source" "$dest"
+        fi
+    done
+    
+    echo "✅ Configuration import complete!"
+    echo ""
 }
 
 # === FUNCTION: Initialize Git repo ===
@@ -143,9 +364,17 @@ initialize_git_repo() {
         cd "$DOTFILES_DIR"
         git init
         
-        # Create initial files if they don't exist
+        # Create initial directory structure
         mkdir -p .config/{git,nvim}
-        touch .bashrc .bash_aliases .tmux.conf .config/starship.toml
+        
+        # Import existing configs first
+        discover_and_import_configs
+        
+        # Create any missing basic files (only if they don't exist)
+        [ ! -f "$DOTFILES_DIR/.bashrc" ] && touch "$DOTFILES_DIR/.bashrc"
+        [ ! -f "$DOTFILES_DIR/.bash_aliases" ] && touch "$DOTFILES_DIR/.bash_aliases"
+        [ ! -f "$DOTFILES_DIR/.tmux.conf" ] && touch "$DOTFILES_DIR/.tmux.conf"
+        [ ! -f "$DOTFILES_DIR/.config/starship.toml" ] && touch "$DOTFILES_DIR/.config/starship.toml"
         
         # Create a basic README
         cat > README.md << 'EOF'
@@ -173,28 +402,55 @@ EOF
         git add .
         git commit -m "Initial dotfiles setup"
         
-        echo "📋 Next steps for GitHub:"
+        echo "📋 GitHub repository setup:"
         echo "1. Go to https://github.com/new"
         echo "2. Create a new repository named 'dotfiles'"
         echo "3. Don't initialize with README, .gitignore, or license"
-        echo "4. Run these commands:"
-        echo "   git remote add origin git@github.com:YOUR_USERNAME/dotfiles.git"
-        echo "   git branch -M main"
-        echo "   git push -u origin main"
+        echo "4. Leave it empty - we'll push our existing code"
         echo ""
-        read -p "Press Enter when you've created the GitHub repository..."
+        read -p "Press Enter when you've created the GitHub repository (or 'q' to quit)... " GITHUB_CONTINUE
+        check_quit "$GITHUB_CONTINUE"
         
-        read -p "Enter your GitHub username: " GITHUB_USER
-        git remote add origin "git@github.com:$GITHUB_USER/dotfiles.git"
+        read -p "Enter your GitHub username (q to quit): " GITHUB_USER
+        check_quit "$GITHUB_USER"
+        
+        # Ask about SSH vs HTTPS
+        echo ""
+        echo "Choose connection method:"
+        echo "1. SSH (recommended - uses the SSH key we set up)"
+        echo "2. HTTPS (will prompt for username/token)"
+        echo "q. Quit"
+        read -p "Enter choice (1, 2, or q): " CONNECTION_CHOICE
+        check_quit "$CONNECTION_CHOICE"
+        
+        if [ "$CONNECTION_CHOICE" = "1" ]; then
+            git remote add origin "git@github.com:$GITHUB_USER/dotfiles.git"
+            REMOTE_URL="git@github.com:$GITHUB_USER/dotfiles.git"
+        else
+            git remote add origin "https://github.com/$GITHUB_USER/dotfiles.git"
+            REMOTE_URL="https://github.com/$GITHUB_USER/dotfiles.git"
+        fi
+        
         git branch -M main
         
         echo "🚀 Attempting to push to GitHub..."
         if git push -u origin main; then
             echo "✅ Successfully pushed to GitHub!"
+            echo "🌐 Your repository: https://github.com/$GITHUB_USER/dotfiles"
         else
-            echo "❌ Push failed. You may need to set up SSH keys or use HTTPS."
-            echo "For SSH keys, visit: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
-            echo "Or use HTTPS: git remote set-url origin https://github.com/$GITHUB_USER/dotfiles.git"
+            echo "❌ Push failed."
+            echo ""
+            echo "💡 To fix this later, run these commands:"
+            echo "   cd $DOTFILES_DIR"
+            if [ "$CONNECTION_CHOICE" = "1" ]; then
+                echo "   # If you need to set up SSH keys:"
+                echo "   # Visit: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+                echo "   # Or switch to HTTPS:"
+                echo "   git remote set-url origin https://github.com/$GITHUB_USER/dotfiles.git"
+            fi
+            echo "   git push -u origin main"
+            echo ""
+            echo "⚠️  Continuing with local setup..."
         fi
     else
         echo "✅ Git repository already exists"
@@ -233,13 +489,32 @@ symlink_configs() {
     
     mkdir -p "$CONFIG_TARGET"
     
-    # Only symlink files that exist
-    safe_link "$DOTFILES_DIR/.config/git" "$CONFIG_TARGET/git"
-    safe_link "$DOTFILES_DIR/.config/nvim" "$CONFIG_TARGET/nvim"
-    safe_link "$DOTFILES_DIR/.config/starship.toml" "$CONFIG_TARGET/starship.toml"
-    safe_link "$DOTFILES_DIR/.bashrc" "$HOME/.bashrc"
-    safe_link "$DOTFILES_DIR/.bash_aliases" "$HOME/.bash_aliases"
-    safe_link "$DOTFILES_DIR/.tmux.conf" "$HOME/.tmux.conf"
+    # Define all possible symlinks
+    declare -A SYMLINKS=(
+        ["$DOTFILES_DIR/.bashrc"]="$HOME/.bashrc"
+        ["$DOTFILES_DIR/.bash_aliases"]="$HOME/.bash_aliases"
+        ["$DOTFILES_DIR/.bash_profile"]="$HOME/.bash_profile"
+        ["$DOTFILES_DIR/.profile"]="$HOME/.profile"
+        ["$DOTFILES_DIR/.tmux.conf"]="$HOME/.tmux.conf"
+        ["$DOTFILES_DIR/.vimrc"]="$HOME/.vimrc"
+        ["$DOTFILES_DIR/.zshrc"]="$HOME/.zshrc"
+        ["$DOTFILES_DIR/.gitconfig"]="$HOME/.gitconfig"
+        ["$DOTFILES_DIR/.config/starship.toml"]="$CONFIG_TARGET/starship.toml"
+        ["$DOTFILES_DIR/.config/nvim"]="$CONFIG_TARGET/nvim"
+        ["$DOTFILES_DIR/.config/git"]="$CONFIG_TARGET/git"
+        ["$DOTFILES_DIR/.config/tmux"]="$CONFIG_TARGET/tmux"
+        ["$DOTFILES_DIR/.config/alacritty"]="$CONFIG_TARGET/alacritty"
+        ["$DOTFILES_DIR/.config/kitty"]="$CONFIG_TARGET/kitty"
+        ["$DOTFILES_DIR/.config/wezterm"]="$CONFIG_TARGET/wezterm"
+        ["$DOTFILES_DIR/.config/fish"]="$CONFIG_TARGET/fish"
+        ["$DOTFILES_DIR/.config/zsh"]="$CONFIG_TARGET/zsh"
+    )
+    
+    # Only symlink files/directories that exist in the dotfiles directory
+    for source in "${!SYMLINKS[@]}"; do
+        dest="${SYMLINKS[$source]}"
+        safe_link "$source" "$dest"
+    done
     
     echo "✅ Symlinks complete."
 }
@@ -291,26 +566,43 @@ EOF
     echo ""
     gpg --armor --export "$KEYID"
     echo ""
-    read -p "Press Enter after you've added the GPG key to GitHub..."
+    read -p "Press Enter after you've added the GPG key to GitHub (or 'q' to quit)... " GPG_CONTINUE
+    check_quit "$GPG_CONTINUE"
 }
 
 # === MAIN ===
 echo "🚀 Starting dotfiles setup..."
 
-# Detect OS first
+# Show setup menu
+setup_menu
+
+# Detect OS first  
 detect_os
 
-# Install packages
-install_packages
+# Execute selected components
+if [ "$INSTALL_PACKAGES" = true ]; then
+    install_packages
+fi
 
-# Setup Git
-setup_git
+if [ "$SETUP_GIT" = true ]; then
+    setup_git
+fi
 
-# Initialize Git repo and handle GitHub setup
-initialize_git_repo
+if [ "$SETUP_SSH" = true ]; then
+    setup_ssh_key
+fi
 
-# Create symlinks
-symlink_configs
+if [ "$SETUP_REPO" = true ]; then
+    initialize_git_repo
+fi
+
+if [ "$IMPORT_CONFIGS" = true ]; then
+    discover_and_import_configs
+fi
+
+if [ "$CREATE_SYMLINKS" = true ]; then
+    symlink_configs
+fi
 
 echo "🎉 Dotfiles setup complete!"
 echo "📋 Next steps:"

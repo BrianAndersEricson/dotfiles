@@ -1,0 +1,8 @@
+[user]
+	name = Brian Ericson
+	email = brianericson@pm.me
+	signingkey = 87D420DFB444DD10
+[init]
+	defaultBranch = master
+[commit]
+	gpgsign = true
