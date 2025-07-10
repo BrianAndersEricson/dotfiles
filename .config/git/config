@@ -1,0 +1,47 @@
+[user]
+	name = Brian Ericson
+	email = brianericson@pm.me
+	signingkey = 87D420DFB444DD10
+
+[commit]
+	gpgSign = true
+	template = ~/.config/git/template
+	verbose = true
+
+[core]
+
+	autocrlf = input  # keep newlines as in input
+	compression = 9
+	whitespace = error
+	preloadindex = true
+
+[advice]
+	addEmptyPathspec = false
+	pushNonFastForward = false
+	statusHints = false
+
+[url "git@github.com:BrianAndersEricson/"]
+	insteadOf = "bae:"
+
+[url "git@github.com:"]
+	insteadOf = "gh:"
+
+[status]
+	branch = true
+	short = true
+	showStash = true
+	showUntrackedFiles = all
+
+[diff]
+	context = 3
+	renames = copies
+	interHunkContext = 10
+
+[push]
+	autoSetupRemote = true  # easier to push new branches
+	default = current  # push only current branch by default
+	followTags = true  # push also tags
+
+[pull]
+	rebase = true
+	default = current
