@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# ─── Define DOTFILES_DIR if not already defined ───────────────────────
+export DOTFILES_DIR="${DOTFILES_DIR:-$HOME/.src/dotfiles}"
+
+# ─── Colors ─────────────────────────────────────────────────────────────
+bold=$(tput bold)
+normal=$(tput sgr0)
+blue=$(tput setaf 4)
+white=$(tput setaf 7)
+cyan=$(tput setaf 6)
+magenta=$(tput setaf 5)
+green=$(tput setaf 2)
+yellow=$(tput setaf 3)
+
+# ─── Greeting ───────────────────────────────────────────────────────────
+hour=$(date +"%H")
+if [ "$hour" -lt 12 ]; then
+    greeting="Good morning"
+elif [ "$hour" -lt 18 ]; then
+    greeting="Good afternoon"
+else
+    greeting="Good evening"
+fi
+
+echo "${bold}${blue}${greeting}, Brian.${normal}"
+echo "${white}$(date)${normal}"
+
+# ─── Weather ────────────────────────────────────────────────────────────
+weather=$(curl -s 'wttr.in/?format=3' 2>/dev/null)
+if [[ -z "$weather" ]]; then
+    weather="(Unable to retrieve weather — are you offline?)"
+fi
+echo "$weather"
+
+# ─── System Info ────────────────────────────────────────────────────────
+# Battery level
+battery="N/A"
+bat_path=$(find /sys/class/power_supply/ -name 'BAT*' 2>/dev/null | head -n 1)
+if [[ -n "$bat_path" ]]; then
+    capacity=$(cat "$bat_path/capacity" 2>/dev/null)
+    battery="$capacity%"
+fi
+
+# IP address (first non-loopback IPv4)
+ip=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $2}' | cut -d/ -f1 | head -n1)
+[[ -z "$ip" ]] && ip="(Unavailable)"
+
+# Network (SSID or LAN)
+if command -v iwgetid &>/dev/null && iwgetid -r &>/dev/null; then
+    network=$(iwgetid -r)
+else
+    network="LAN or unknown"
+fi
+
+# Uptime and disk info
+uptime_info=$(uptime -p | sed 's/up //')
+disk_root=$(df -h / | awk 'NR==2 {print $3 " used of " $2 " (" $5 " full)"}')
+
+echo ""
+echo "${bold}${cyan}─ System ───────────────${normal}"
+echo "${bold}Battery Level:${normal}   $battery"
+echo "${bold}IP Address:${normal}     $ip"
+echo "${bold}Network SSID:${normal}   $network"
+echo "${bold}Uptime:${normal}         $uptime_info"
+echo "${bold}Disk /:${normal}         $disk_root"
+
+# ─── Quote ──────────────────────────────────────────────────────────────
+quote_file="$DOTFILES_DIR/.config/quotes.txt"
+if [[ -f "$quote_file" ]]; then
+    quote=$(shuf -n 1 "$quote_file")
+    quote_formatted=$(echo "$quote" | sed -E "s/\*(.*?)\*/${bold}\1${normal}/g")
+else
+    quote_formatted="Create a quote file at \$DOTFILES_DIR/.config/quotes.txt to show a daily quote."
+fi
+
+echo ""
+echo "${bold}${yellow}─ Quote ────────────────${normal}"
+echo "$quote_formatted"
