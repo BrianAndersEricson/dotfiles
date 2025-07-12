@@ -3,6 +3,8 @@
 	email = brianericson@pm.me
 	signingkey = 87D420DFB444DD10
 [init]
-	defaultBranch = master
+	defaultBranch = main
+
+
 [commit]
-	gpgsign = true
+	gpgSign = false
