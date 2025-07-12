@@ -33,15 +33,7 @@ if [[ -z "$weather" ]]; then
 fi
 echo "$weather"
 
-# ─── System Info ────────────────────────────────────────────────────────
-# Battery level
-battery="N/A"
-bat_path=$(find /sys/class/power_supply/ -name 'BAT*' 2>/dev/null | head -n 1)
-if [[ -n "$bat_path" ]]; then
-    capacity=$(cat "$bat_path/capacity" 2>/dev/null)
-    battery="$capacity%"
-fi
-
+# ─── System Info ──────────────────────────────────────────────────
 # IP address (first non-loopback IPv4)
 ip=$(ip -4 addr | awk '/inet/ && !/127.0.0.1/ {print $2}' | cut -d/ -f1 | head -n1)
 [[ -z "$ip" ]] && ip="(Unavailable)"
@@ -59,7 +51,6 @@ disk_root=$(df -h / | awk 'NR==2 {print $3 " used of " $2 " (" $5 " full)"}')
 
 echo ""
 echo "${bold}${cyan}─ System ───────────────${normal}"
-echo "${bold}Battery Level:${normal}   $battery"
 echo "${bold}IP Address:${normal}     $ip"
 echo "${bold}Network SSID:${normal}   $network"
 echo "${bold}Uptime:${normal}         $uptime_info"

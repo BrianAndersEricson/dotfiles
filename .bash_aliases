@@ -8,7 +8,7 @@ if command -v eza &>/dev/null; then
 fi
 
 if command -v bat &>/dev/null; then
-    alias cat='bat'
+    alias cat='bat -pp'
 fi
 
 if command -v fd &>/dev/null; then
@@ -17,10 +17,6 @@ fi
 
 if command -v rg &>/dev/null; then
     alias grep='rg'
-fi
-
-if command -v duf &>/dev/null; then
-    alias df='duf'
 fi
 
 if command -v bottom &>/dev/null; then
@@ -41,7 +37,7 @@ alias gd='git diff'
 alias gcl='git clone'
 
 # Safety nets
-alias rm='rm -i'
+alias r='rm -i'
 alias cp='cp -i'
 alias mv='mv -i'
 
@@ -94,3 +90,31 @@ alias gl='git log --all --graph --pretty\
 alias gb='git branch'
 alias gi='git init'
 alias gcl='git clone'
+
+# Safe Symlinking
+linkdot() {
+  local src="$1"
+  local dst="$2"
+  local backup_dir="$HOME/.dotfiles-backup"
+
+  if [[ -z "$src" || -z "$dst" ]]; then
+    echo "Usage: linkdot <source> <destination>"
+    return 1
+  fi
+
+  # Ensure full paths
+  src=$(realpath -e "$src")
+  dst=$(realpath -m "$dst")
+
+  # Make backup if needed
+  if [[ -e "$dst" || -L "$dst" ]]; then
+    mkdir -p "$backup_dir/$(dirname "${dst#$HOME/}")"
+    mv "$dst" "$backup_dir/${dst#$HOME/}"
+    echo "🔐 Backed up: $dst → $backup_dir/${dst#$HOME/}"
+  fi
+
+  # Create symlink
+  ln -s "$src" "$dst"
+  echo "🔗 Linked: $dst → $src"
+}
+

@@ -263,9 +263,7 @@ install_starship() {
         current_version=$(starship --version | awk '{print $2}')
         print_info "Starship is already installed (version $current_version)"
         
-        if ! confirm "Reinstall/update Starship?"; then
-            return 0
-        fi
+        ! confirm "Reinstall/update Starship?" && return 0
     fi
     
     print_step "Installing Starship..."
@@ -275,7 +273,6 @@ install_starship() {
         
         # Create basic config
         mkdir -p "$HOME/.config"
-        fi
     else
         print_error "Failed to install Starship"
         return 1
@@ -628,8 +625,7 @@ show_main_menu() {
     echo "  1) 📋 Install packages by category"
     echo "  2) 🏗️  Quick install (essentials + modern CLI + dev tools)"
     echo "  3) 🎯 Install Arch AUR helper (yay)"
-    echo "  4) 📝 Create shell aliases"
-    echo "  5) 🔄 Update system packages"
+    echo "  4) 🔄 Update system packages"
     echo "  q) 🚪 Quit"
     echo
     read -p "Enter your choice: " -n 1 main_choice
@@ -660,10 +656,6 @@ quick_install() {
             install_special_tool "$tool"
         done
         
-        # Create aliases
-        create_shell_aliases
-        
-        print_success "Quick install completed!"
     fi
 }
 
@@ -711,10 +703,6 @@ main() {
                 pause_for_user
                 ;;
             4)
-                create_shell_aliases
-                pause_for_user
-                ;;
-            5)
                 update_packages
                 pause_for_user
                 ;;
