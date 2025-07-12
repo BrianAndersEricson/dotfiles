@@ -1,7 +1,7 @@
 #!/bin/bash
-# GitHub Setup Script - Configure SSH and GPG for GitHub
-# Version: 1.0.0
-# This script helps you set up your device to work with GitHub
+# GitHub Setup Script - Configure SSH for GitHub
+# Version: 2.0.0
+# This script helps you set up your device to work with GitHub using SSH
 
 set -euo pipefail
 
@@ -17,6 +17,7 @@ readonly NC='\033[0m'
 # Configuration
 readonly SSH_KEY_PATH="$HOME/.ssh/id_ed25519"
 readonly LOG_FILE="/tmp/github-setup-$(date +%Y%m%d-%H%M%S).log"
+readonly DOTFILES_REPO="BrianAndersEricson/dotfiles"
 
 # Helper functions
 print_colored() {
@@ -83,10 +84,6 @@ check_dependencies() {
         missing+=("openssh")
     fi
     
-    if ! command -v gpg &>/dev/null; then
-        missing+=("gnupg")
-    fi
-    
     if ! command -v curl &>/dev/null; then
         missing+=("curl")
     fi
@@ -103,7 +100,6 @@ check_dependencies() {
             for pkg in "${missing[@]}"; do
                 case "$pkg" in
                     "openssh") arch_packages+=("openssh") ;;
-                    "gnupg") arch_packages+=("gnupg") ;;
                     *) arch_packages+=("$pkg") ;;
                 esac
             done
@@ -259,287 +255,145 @@ add_ssh_to_github() {
     echo
     
     pause_for_user
-    
-    # Test SSH connection
-    print_info "Testing SSH connection to GitHub..."
-    if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-        print_success "SSH connection successful! You're connected to GitHub."
-    else
-        print_warning "SSH connection test failed, but this might be normal."
-        print_info "The connection might still work. Let's continue..."
-    fi
 }
 
-# Step 4: Setup GPG (optional)
-setup_gpg_key() {
-    print_header "Step 4: GPG Key Setup (Optional)"
+# Step 4: Switch dotfiles repo to SSH
+switch_dotfiles_to_ssh() {
+    print_header "Step 4: Switch Dotfiles Repository to SSH"
     
-    print_info "GPG signing adds an extra layer of verification to your commits."
-    print_info "It shows a 'Verified' badge on GitHub."
-    echo
+    # Find the dotfiles directory by looking for the git repo
+    local dotfiles_dir=""
+    local search_dirs=(
+        "$HOME/dotfiles"
+        "$HOME/.dotfiles"
+        "$HOME/Projects/dotfiles"
+        "$HOME/projects/dotfiles"
+        "$HOME/code/dotfiles"
+        "$HOME/Code/dotfiles"
+        "$(pwd)"  # Current directory
+    )
     
-    if ! confirm "Do you want to set up GPG signing?"; then
-        print_info "Skipping GPG setup"
-        return 0
-    fi
+    for dir in "${search_dirs[@]}"; do
+        if [[ -d "$dir/.git" ]]; then
+            # Check if this is the dotfiles repo
+            if git -C "$dir" remote get-url origin 2>/dev/null | grep -q "$DOTFILES_REPO"; then
+                dotfiles_dir="$dir"
+                break
+            fi
+        fi
+    done
     
-    local name email
-    name=$(git config --global user.name)
-    email=$(git config --global user.email)
-    
-    # Check for existing key
-    local existing_keyid=""
-    if gpg --list-secret-keys --keyid-format=long "$email" &>/dev/null; then
-        existing_keyid=$(gpg --list-secret-keys --keyid-format=long "$email" | 
-                        grep -E '^sec' | head -n1 | awk '{print $2}' | cut -d'/' -f2)
-        
-        print_info "You already have a GPG key for $email"
-        print_info "Key ID: $existing_keyid"
-        echo
-        print_info "Options:"
-        echo "  1) Use existing key"
-        echo "  2) Create a new key"
-        echo "  3) Remove existing key and create new one"
-        echo
-        read -p "Choose an option (1-3): " -n 1 gpg_choice
+    if [[ -z "$dotfiles_dir" ]]; then
+        print_warning "Could not find dotfiles repository automatically."
+        print_info "Are you currently in your dotfiles directory?"
         echo
         
-        case "$gpg_choice" in
-            1)
-                # Use existing key
-                git config --global user.signingkey "$existing_keyid"
-                git config --global commit.gpgsign true
-                configure_gpg_agent
-                print_success "Configured Git to use existing GPG key"
-                return 0
-                ;;
-            2)
-                # Create additional key (continue with normal flow)
-                ;;
-            3)
-                # Remove existing key
-                print_warning "Removing existing GPG key..."
-                gpg --delete-secret-keys "$existing_keyid" 2>/dev/null || true
-                gpg --delete-keys "$email" 2>/dev/null || true
-                print_info "Existing key removed"
-                ;;
-            *)
-                print_error "Invalid choice"
-                return 1
-                ;;
-        esac
-    fi
-    
-    print_info "Generating GPG key..."
-    print_info "This might take a moment..."
-    echo
-    
-    # Create GPG directory with proper permissions
-    mkdir -p ~/.gnupg
-    chmod 700 ~/.gnupg
-    
-    # Configure GPG for no passphrase
-    configure_gpg_agent
-    
-    # Create batch file for GPG key generation
-    local batch_file="/tmp/gpg-batch-$"
-    cat > "$batch_file" <<EOF
-%echo Generating GPG key
-Key-Type: RSA
-Key-Length: 4096
-Subkey-Type: RSA
-Subkey-Length: 4096
-Name-Real: $name
-Name-Email: $email
-Expire-Date: 2y
-%no-protection
-%commit
-%echo done
-EOF
-    
-    # Generate key
-    if gpg --batch --generate-key "$batch_file"; then
-        rm -f "$batch_file"
-        print_success "GPG key generated!"
-    else
-        rm -f "$batch_file"
-        print_error "Failed to generate GPG key"
-        return 1
-    fi
-    
-    # Get key ID
-    local keyid
-    keyid=$(gpg --list-secret-keys --keyid-format=long "$email" | 
-           grep -E '^sec' | head -n1 | awk '{print $2}' | cut -d'/' -f2)
-    
-    if [[ -z "$keyid" ]]; then
-        print_error "Failed to find generated GPG key"
-        return 1
-    fi
-    
-    # Configure Git to use GPG
-    git config --global user.signingkey "$keyid"
-    git config --global commit.gpgsign true
-    
-    print_success "GPG key generated and configured!"
-    print_info "Key ID: $keyid"
-    log "GPG key generated: $keyid"
-}
-
-# Configure GPG agent for no passphrase
-configure_gpg_agent() {
-    # Create GPG config files
-    cat > ~/.gnupg/gpg.conf <<EOF
-use-agent
-pinentry-mode loopback
-no-tty
-EOF
-    
-    cat > ~/.gnupg/gpg-agent.conf <<EOF
-allow-loopback-pinentry
-default-cache-ttl 31536000
-max-cache-ttl 31536000
-EOF
-    
-    # Set proper permissions
-    chmod 600 ~/.gnupg/gpg.conf
-    chmod 600 ~/.gnupg/gpg-agent.conf
-    
-    # Restart GPG agent
-    gpgconf --kill gpg-agent 2>/dev/null || true
-    gpgconf --launch gpg-agent
-    
-    # For WSL, we might need additional config
-    if [[ "$OS" == "wsl" ]]; then
-        export GPG_TTY=$(tty)
-    fi
-}
-
-# Step 5: Add GPG key to GitHub
-add_gpg_to_github() {
-    print_header "Step 5: Add GPG Key to GitHub"
-    
-    local email keyid
-    email=$(git config --global user.email)
-    keyid=$(git config --global user.signingkey 2>/dev/null || true)
-    
-    if [[ -z "$keyid" ]]; then
-        print_info "No GPG key configured. Skipping..."
-        return 0
-    fi
-    
-    print_info "Your GPG public key:"
-    echo
-    
-    # Export public key
-    local gpg_public
-    gpg_public=$(gpg --armor --export "$keyid")
-    print_colored "$GREEN" "$gpg_public"
-    echo
-    
-    # Try to copy to clipboard
-    local copied=false
-    if command -v pbcopy &>/dev/null; then
-        echo "$gpg_public" | pbcopy
-        copied=true
-    elif command -v xclip &>/dev/null; then
-        echo "$gpg_public" | xclip -selection clipboard
-        copied=true
-    elif [[ "$OS" == "wsl" ]] && command -v clip.exe &>/dev/null; then
-        echo "$gpg_public" | clip.exe
-        copied=true
-    fi
-    
-    if [[ "$copied" == true ]]; then
-        print_success "GPG key copied to clipboard!"
-    else
-        print_info "Please copy the GPG key above"
-    fi
-    
-    echo
-    print_step "Now, let's add this key to GitHub:"
-    echo
-    print_info "1. Open GitHub GPG settings:"
-    print_colored "$CYAN" "   https://github.com/settings/keys"
-    echo
-    print_info "2. Click 'New GPG key' (green button)"
-    echo
-    print_info "3. Paste your GPG key"
-    echo
-    print_info "4. Click 'Add GPG key'"
-    echo
-    
-    pause_for_user
-}
-
-# Step 6: Test everything
-test_github_setup() {
-    print_header "Step 6: Test Your Setup"
-    
-    print_info "Let's create a test repository to verify everything works!"
-    echo
-    
-    if ! confirm "Create a test repository?"; then
-        return 0
-    fi
-    
-    # Create test repo
-    local test_dir="$HOME/github-test-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$test_dir"
-    cd "$test_dir"
-    
-    print_step "Creating test repository..."
-    git init
-    echo "# GitHub Test Repository" > README.md
-    echo "This is a test repository created on $(date)" >> README.md
-    
-    git add README.md
-    
-    # Check if GPG signing is enabled
-    if [[ "$(git config --global commit.gpgsign)" == "true" ]]; then
-        print_info "Creating GPG-signed commit..."
-        
-        # Make sure GPG agent is configured
-        configure_gpg_agent
-        
-        # Set GPG_TTY for terminal
-        export GPG_TTY=$(tty)
-        
-        # Try to commit with explicit no-gpg-sign first to test
-        if ! git commit -m "Initial commit - testing GitHub setup" 2>/dev/null; then
-            print_warning "GPG signing failed. Trying without signing..."
-            git commit --no-gpg-sign -m "Initial commit - testing GitHub setup"
-            print_warning "Commit created without GPG signature."
-            print_info "You may need to troubleshoot GPG signing separately."
+        if [[ -d ".git" ]] && git remote get-url origin 2>/dev/null | grep -q "$DOTFILES_REPO"; then
+            dotfiles_dir="$(pwd)"
         else
-            print_success "GPG-signed commit created successfully!"
-            # Show signature
-            git log --show-signature -1
+            read -p "Enter the path to your dotfiles directory (or press Enter to skip): " dotfiles_dir
+            if [[ -z "$dotfiles_dir" ]]; then
+                print_info "Skipping dotfiles repository switch"
+                return 0
+            fi
+        fi
+    fi
+    
+    if [[ ! -d "$dotfiles_dir/.git" ]]; then
+        print_error "Not a git repository: $dotfiles_dir"
+        return 1
+    fi
+    
+    # Get current remote URL
+    local current_url
+    current_url=$(git -C "$dotfiles_dir" remote get-url origin 2>/dev/null || true)
+    
+    if [[ -z "$current_url" ]]; then
+        print_error "No origin remote found in $dotfiles_dir"
+        return 1
+    fi
+    
+    print_info "Found dotfiles repository at: $dotfiles_dir"
+    print_info "Current remote URL: $current_url"
+    
+    # Check if already using SSH
+    if [[ "$current_url" == git@github.com:* ]]; then
+        print_success "Already using SSH for dotfiles repository!"
+        return 0
+    fi
+    
+    # Switch to SSH
+    local new_url="git@github.com:$DOTFILES_REPO.git"
+    print_info "Switching to SSH URL: $new_url"
+    
+    if git -C "$dotfiles_dir" remote set-url origin "$new_url"; then
+        print_success "Successfully switched dotfiles repository to SSH!"
+        log "Switched dotfiles repo to SSH: $dotfiles_dir"
+    else
+        print_error "Failed to switch remote URL"
+        return 1
+    fi
+}
+
+# Step 5: Test SSH connection
+test_ssh_connection() {
+    print_header "Step 5: Test SSH Connection"
+    
+    print_info "Testing SSH connection to GitHub..."
+    echo
+    
+    # Ensure SSH agent is running and key is added
+    eval "$(ssh-agent -s)" &>/dev/null
+    ssh-add "$SSH_KEY_PATH" &>/dev/null
+    
+    # Test connection
+    local ssh_output
+    ssh_output=$(ssh -T git@github.com 2>&1 || true)
+    
+    if echo "$ssh_output" | grep -q "successfully authenticated"; then
+        print_success "SSH connection successful! ✨"
+        print_info "You're all set to use Git with SSH!"
+        
+        # Extract username from SSH output
+        local github_user
+        github_user=$(echo "$ssh_output" | grep -o "Hi [^!]*" | cut -d' ' -f2)
+        if [[ -n "$github_user" ]]; then
+            print_info "Authenticated as: $github_user"
         fi
     else
-        git commit -m "Initial commit - testing GitHub setup"
-        print_success "Commit created successfully!"
+        print_error "SSH connection test failed!"
+        print_info "Output: $ssh_output"
+        echo
+        print_info "Please make sure you've added your SSH key to GitHub."
+        print_info "You can manually test with: ssh -T git@github.com"
+        return 1
     fi
     
-    print_success "Test repository created at: $test_dir"
-    echo
-    print_info "To push this to GitHub:"
-    print_step "1. Create a new repository on GitHub: https://github.com/new"
-    print_step "2. Don't initialize it with any files"
-    print_step "3. Run these commands:"
-    echo
-    print_colored "$YELLOW" "cd $test_dir"
-    print_colored "$YELLOW" "git remote add origin git@github.com:YOUR_USERNAME/REPO_NAME.git"
-    print_colored "$YELLOW" "git push -u origin main"
-    echo
+    # If we found a dotfiles directory, test pushing/pulling
+    local dotfiles_dir=""
+    for dir in "$HOME/dotfiles" "$HOME/.dotfiles" "$(pwd)"; do
+        if [[ -d "$dir/.git" ]] && git -C "$dir" remote get-url origin 2>/dev/null | grep -q "$DOTFILES_REPO"; then
+            dotfiles_dir="$dir"
+            break
+        fi
+    done
     
-    print_info "You can delete this test repo later with:"
-    print_colored "$YELLOW" "rm -rf $test_dir"
+    if [[ -n "$dotfiles_dir" ]]; then
+        echo
+        print_info "Testing Git operations on dotfiles repository..."
+        
+        # Test fetch
+        if git -C "$dotfiles_dir" fetch --dry-run 2>/dev/null; then
+            print_success "Git fetch test successful!"
+        else
+            print_warning "Git fetch test failed - you may need to check your permissions"
+        fi
+    fi
 }
 
-# Step 7: Create helpful aliases
+# Create helpful aliases
 setup_github_aliases() {
-    print_header "Step 7: Helpful Git Aliases (Optional)"
+    print_header "Helpful Git Aliases (Optional)"
     
     print_info "Would you like to set up some helpful Git aliases?"
     echo
@@ -568,30 +422,6 @@ setup_github_aliases() {
     print_step "git visual # Pretty log view"
 }
 
-# Main menu
-show_menu() {
-    # Don't clear - let user see previous output
-    echo
-    print_colored "$CYAN" "═══════════════════════════════════════════════════════════════"
-    print_colored "$CYAN" "                   🐙 GitHub Setup Assistant                   "
-    print_colored "$CYAN" "═══════════════════════════════════════════════════════════════"
-    echo
-    
-    print_info "What would you like to do?"
-    echo
-    echo "  1) 🚀 Complete setup (recommended for new devices)"
-    echo "  2) 🔧 Configure Git name and email only"
-    echo "  3) 🔑 Generate SSH key only"
-    echo "  4) 📝 Set up GPG signing only"
-    echo "  5) 🧪 Test current setup"
-    echo "  6) 📋 Show current configuration"
-    echo "  7) 🧹 Clear screen"
-    echo "  q) 🚪 Quit"
-    echo
-    read -p "Enter your choice: " -n 1 choice
-    echo
-}
-
 # Show current configuration
 show_current_config() {
     print_header "Current Configuration"
@@ -610,38 +440,69 @@ show_current_config() {
     if [[ -f "$SSH_KEY_PATH" ]]; then
         echo "  Key exists: $SSH_KEY_PATH"
         echo "  Fingerprint: $(ssh-keygen -lf "$SSH_KEY_PATH" | awk '{print $2}')"
-        
-        # Test SSH connection
-        print_step "Testing SSH connection to GitHub..."
-        if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-            print_success "SSH connection to GitHub: Working ✓"
-        else
-            print_warning "SSH connection to GitHub: Not working"
-        fi
     else
         echo "  No SSH key found"
     fi
     echo
     
-    # GPG key
-    print_info "GPG Key:"
-    local gpg_key
-    gpg_key=$(git config --global user.signingkey 2>/dev/null || echo "Not configured")
-    if [[ "$gpg_key" != "Not configured" ]]; then
-        echo "  Key ID: $gpg_key"
-        echo "  Signing enabled: $(git config --global commit.gpgsign || echo "false")"
-        
-        # Check if key exists
-        if gpg --list-secret-keys "$gpg_key" &>/dev/null; then
-            print_success "GPG key status: Valid ✓"
+    # Test SSH connection
+    print_step "Testing SSH connection to GitHub..."
+    if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+        print_success "SSH connection to GitHub: Working ✓"
+    else
+        print_warning "SSH connection to GitHub: Not working"
+    fi
+    
+    # Check dotfiles repo
+    echo
+    print_info "Dotfiles Repository:"
+    local dotfiles_dir=""
+    for dir in "$HOME/dotfiles" "$HOME/.dotfiles" "$(pwd)"; do
+        if [[ -d "$dir/.git" ]] && git -C "$dir" remote get-url origin 2>/dev/null | grep -q "$DOTFILES_REPO"; then
+            dotfiles_dir="$dir"
+            break
+        fi
+    done
+    
+    if [[ -n "$dotfiles_dir" ]]; then
+        local remote_url
+        remote_url=$(git -C "$dotfiles_dir" remote get-url origin)
+        echo "  Location: $dotfiles_dir"
+        echo "  Remote URL: $remote_url"
+        if [[ "$remote_url" == git@github.com:* ]]; then
+            print_success "  Using SSH: Yes ✓"
         else
-            print_warning "GPG key status: Key not found!"
+            print_warning "  Using SSH: No (HTTPS)"
         fi
     else
-        echo "  No GPG signing configured"
+        echo "  Not found in standard locations"
     fi
     
     pause_for_user
+}
+
+# Main menu
+show_menu() {
+    echo
+    print_colored "$CYAN" "═══════════════════════════════════════════════════════════════"
+    print_colored "$CYAN" "                   🐙 GitHub SSH Setup Assistant                "
+    print_colored "$CYAN" "═══════════════════════════════════════════════════════════════"
+    echo
+    
+    print_info "What would you like to do?"
+    echo
+    echo "  1) 🚀 Complete setup (recommended for new devices)"
+    echo "  2) 🔧 Configure Git name and email only"
+    echo "  3) 🔑 Generate SSH key only"
+    echo "  4) 🔄 Switch dotfiles repo to SSH"
+    echo "  5) 🧪 Test SSH connection"
+    echo "  6) 📋 Show current configuration"
+    echo "  7) 🎨 Set up Git aliases"
+    echo "  8) 🧹 Clear screen"
+    echo "  q) 🚪 Quit"
+    echo
+    read -p "Enter your choice: " -n 1 choice
+    echo
 }
 
 # Main function
@@ -657,10 +518,10 @@ main() {
     # Show welcome banner once at start
     clear
     print_colored "$CYAN" "╔════════════════════════════════════════════════════════════════╗"
-    print_colored "$CYAN" "║               🐙 GitHub Setup Assistant                        ║"
+    print_colored "$CYAN" "║               🐙 GitHub SSH Setup Assistant                    ║"
     print_colored "$CYAN" "║                                                                ║"
     print_colored "$CYAN" "║  This script will help you set up your device to work         ║"
-    print_colored "$CYAN" "║  seamlessly with GitHub using SSH keys and GPG signing.       ║"
+    print_colored "$CYAN" "║  seamlessly with GitHub using SSH keys.                       ║"
     print_colored "$CYAN" "╚════════════════════════════════════════════════════════════════╝"
     
     pause_for_user
@@ -673,12 +534,15 @@ main() {
                 setup_git_config
                 setup_ssh_key
                 add_ssh_to_github
-                setup_gpg_key
-                add_gpg_to_github
-                test_github_setup
-                setup_github_aliases
+                switch_dotfiles_to_ssh
+                test_ssh_connection
                 echo
-                print_success "Complete setup finished!"
+                if confirm "Would you like to set up Git aliases?"; then
+                    setup_github_aliases
+                fi
+                echo
+                print_success "Complete setup finished! 🎉"
+                print_info "You can now push/pull your dotfiles using SSH!"
                 pause_for_user
                 ;;
             2)
@@ -691,22 +555,25 @@ main() {
                 pause_for_user
                 ;;
             4)
-                setup_gpg_key
-                add_gpg_to_github
+                switch_dotfiles_to_ssh
                 pause_for_user
                 ;;
             5)
-                test_github_setup
+                test_ssh_connection
                 pause_for_user
                 ;;
             6)
                 show_current_config
                 ;;
             7)
+                setup_github_aliases
+                pause_for_user
+                ;;
+            8)
                 clear
                 ;;
             q|Q)
-                print_info "Thanks for using GitHub Setup Assistant!"
+                print_info "Thanks for using GitHub SSH Setup Assistant!"
                 break
                 ;;
             *)
