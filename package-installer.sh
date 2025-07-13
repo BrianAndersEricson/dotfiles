@@ -25,6 +25,7 @@ PACKAGE_MANAGER=""
 INSTALL_CMD=""
 UPDATE_CMD=""
 AUR_HELPER=""
+INSTALLED_PACKAGES=()
 
 # Helper functions
 print_colored() {
@@ -113,6 +114,7 @@ install_package() {
     if $INSTALL_CMD "$package" &>/dev/null; then
         print_success "Installed: $package"
         log "Installed: $package"
+        INSTALLED_PACKAGES+=("$package")
         return 0
     else
         print_error "Failed to install: $package"
@@ -155,6 +157,7 @@ install_aur_helper() {
         if makepkg -si --noconfirm &>/dev/null; then
             print_success "Yay installed successfully!"
             AUR_HELPER="yay"
+            INSTALLED_PACKAGES+=("yay (AUR)")
             cd - &>/dev/null
             rm -rf "$yay_dir"
             return 0
@@ -178,6 +181,7 @@ install_aur_package() {
     if $AUR_HELPER -S --needed --noconfirm "$package" &>/dev/null; then
         print_success "Installed from AUR: $package"
         log "Installed from AUR: $package"
+        INSTALLED_PACKAGES+=("$package (AUR)")
         return 0
     else
         print_error "Failed to install from AUR: $package"
@@ -190,17 +194,23 @@ install_aur_package() {
 install_neovim() {
     print_header "Installing Neovim (Latest Version)"
     
-    # Check current version
+    # Check current version - handle the case where nvim exists but can't run
     local current_version="not_installed"
     if command -v nvim &>/dev/null; then
-        current_version=$(nvim --version | head -n1 | awk '{print $2}')
-        print_info "Current version: $current_version"
+        # Try to get version, but don't fail if nvim is broken
+        current_version=$(nvim --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "error")
+        if [[ "$current_version" == "error" ]]; then
+            print_warning "Neovim is installed but not working properly"
+            current_version="not_installed"
+        else
+            print_info "Current version: $current_version"
+        fi
     fi
     
     # Get latest version
     print_step "Checking latest version..."
     local latest_version
-    latest_version=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest | grep 'tag_name' | cut -d'"' -f4)
+    latest_version=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4)
     
     if [[ -z "$latest_version" ]]; then
         print_error "Could not fetch latest version"
@@ -214,44 +224,180 @@ install_neovim() {
         return 0
     fi
     
-    if confirm "Install Neovim $latest_version?"; then
-        print_info "Downloading Neovim..."
-        
-        local nvim_path="$HOME/.local/bin/nvim"
-        mkdir -p "$HOME/.local/bin"
-        
-        # Download appropriate version
-        local download_url
-        case "$OS" in
-            debian)
-                download_url="https://github.com/neovim/neovim/releases/latest/download/nvim.appimage"
-                ;;
-            arch)
-                # For Arch, we'll use the AUR version which is usually very recent
-                if [[ -n "$AUR_HELPER" ]]; then
-                    install_aur_package "neovim-git"
-                    return $?
-                else
-                    download_url="https://github.com/neovim/neovim/releases/latest/download/nvim.appimage"
-                fi
-                ;;
-        esac
-        
-        if curl -Lo "$nvim_path" "$download_url" &>/dev/null; then
-            chmod u+x "$nvim_path"
-            print_success "Neovim $latest_version installed to $nvim_path"
+    case "$OS" in
+        debian)
+            # For Ubuntu/Debian, we have multiple options
+            print_info "Choose installation method for Neovim $latest_version:"
+            echo "  1) Tarball (recommended - latest version, fast)"
+            echo "  2) AppImage (portable, may require FUSE)"
+            echo "  3) PPA (system integration, automatic updates)"
+            echo "  4) Build from source (latest features)"
+            echo
+            read -p "Enter choice [1-4]: " nvim_choice
             
-            # Add to PATH if needed
-            if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-                print_info "Adding ~/.local/bin to PATH..."
-                echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-                export PATH="$HOME/.local/bin:$PATH"
+            case "$nvim_choice" in
+                1)
+                    # Tarball method - recommended
+                    print_step "Installing Neovim via tarball..."
+                    local temp_dir="$TEMP_DIR/neovim"
+                    mkdir -p "$temp_dir"
+                    
+                    # Use the correct tarball URL for x86_64
+                    local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+                    
+                    print_step "Downloading Neovim $latest_version..."
+                    if curl -Lo "$temp_dir/nvim-linux-x86_64.tar.gz" "$download_url" && [[ -s "$temp_dir/nvim-linux-x86_64.tar.gz" ]]; then
+                        cd "$temp_dir"
+                        
+                        # Extract the tarball
+                        if tar xzf nvim-linux-x86_64.tar.gz; then
+                            # Find the extracted directory (it should be nvim-linux-x86_64)
+                            local nvim_dir=$(find . -maxdepth 1 -type d -name "nvim-*" | head -n1)
+                            
+                            if [[ -n "$nvim_dir" && -d "$nvim_dir" ]]; then
+                                # Remove old installation if exists
+                                [[ -d "$HOME/.local/nvim" ]] && rm -rf "$HOME/.local/nvim"
+                                
+                                # Copy to local directory
+                                mkdir -p "$HOME/.local"
+                                cp -r "$nvim_dir" "$HOME/.local/nvim"
+                                
+                                # Create symlink in bin
+                                mkdir -p "$HOME/.local/bin"
+                                ln -sf "$HOME/.local/nvim/bin/nvim" "$HOME/.local/bin/nvim"
+                                
+                                cd - &>/dev/null
+                                rm -rf "$temp_dir"
+                                
+                                print_success "Neovim $latest_version installed to $HOME/.local/bin/nvim"
+                                INSTALLED_PACKAGES+=("neovim $latest_version (tarball)")
+                            else
+                                print_error "Failed to find extracted Neovim directory"
+                                return 1
+                            fi
+                        else
+                            print_error "Failed to extract tarball"
+                            return 1
+                        fi
+                    else
+                        print_error "Failed to download Neovim tarball"
+                        return 1
+                    fi
+                    ;;
+                    
+                2)
+                    # AppImage method
+                    print_step "Installing Neovim via AppImage..."
+                    local nvim_path="$HOME/.local/bin/nvim"
+                    mkdir -p "$HOME/.local/bin"
+                    
+                    local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.appimage"
+                    
+                    if curl -Lo "$nvim_path" "$download_url" && [[ -s "$nvim_path" ]]; then
+                        chmod u+x "$nvim_path"
+                        print_success "Neovim $latest_version installed to $nvim_path"
+                        INSTALLED_PACKAGES+=("neovim $latest_version (AppImage)")
+                        print_warning "Note: AppImage requires FUSE. If it doesn't work, try the tarball method."
+                    else
+                        print_error "Failed to download Neovim AppImage"
+                        return 1
+                    fi
+                    ;;
+                    
+                3)
+                    # PPA method
+                    print_step "Installing Neovim via PPA..."
+                    
+                    # Add PPA
+                    print_step "Adding Neovim PPA..."
+                    if ! grep -q "neovim-ppa" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+                        sudo add-apt-repository ppa:neovim-ppa/unstable -y
+                        sudo apt update
+                    fi
+                    
+                    # Install from PPA
+                    if install_package "neovim"; then
+                        local installed_version=$(nvim --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "unknown")
+                        INSTALLED_PACKAGES+=("neovim $installed_version (PPA)")
+                    else
+                        print_error "Failed to install Neovim from PPA"
+                        return 1
+                    fi
+                    ;;
+                    
+                4)
+                    # Build from source
+                    print_step "Building Neovim from source..."
+                    
+                    # Install build dependencies
+                    print_step "Installing build dependencies..."
+                    local build_deps="ninja-build gettext cmake unzip curl build-essential"
+                    for dep in $build_deps; do
+                        install_package "$dep"
+                    done
+                    
+                    # Clone and build
+                    local build_dir="$TEMP_DIR/neovim-build"
+                    rm -rf "$build_dir"
+                    
+                    print_step "Cloning Neovim repository..."
+                    if git clone https://github.com/neovim/neovim.git "$build_dir"; then
+                        cd "$build_dir"
+                        git checkout "$(git describe --tags --abbrev=0)"
+                        
+                        print_step "Building Neovim (this may take a while)..."
+                        if make CMAKE_BUILD_TYPE=Release; then
+                            print_step "Installing Neovim..."
+                            if sudo make install; then
+                                cd - &>/dev/null
+                                rm -rf "$build_dir"
+                                print_success "Neovim $latest_version built and installed"
+                                INSTALLED_PACKAGES+=("neovim $latest_version (source)")
+                            else
+                                print_error "Failed to install Neovim"
+                                return 1
+                            fi
+                        else
+                            print_error "Failed to build Neovim"
+                            return 1
+                        fi
+                    else
+                        print_error "Failed to clone Neovim repository"
+                        return 1
+                    fi
+                    ;;
+                    
+                *)
+                    print_warning "Invalid choice, skipping Neovim installation"
+                    return 1
+                    ;;
+            esac
+            ;;
+            
+        arch)
+            # For Arch, use AUR for latest version
+            if [[ -n "$AUR_HELPER" ]]; then
+                print_step "Installing Neovim from AUR (neovim-git)..."
+                install_aur_package "neovim-git"
+                return $?
+            else
+                # Fallback to official repo which is usually very recent
+                print_step "Installing Neovim from official repository..."
+                if install_package "neovim"; then
+                    local installed_version=$(nvim --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "unknown")
+                    print_info "Installed version: $installed_version"
+                    
+                    # Check if it's recent enough
+                    if [[ "$installed_version" < "v0.11" ]]; then
+                        print_warning "Repository version is older than 0.11. Consider installing an AUR helper for neovim-git."
+                    fi
+                else
+                    print_error "Failed to install Neovim"
+                    return 1
+                fi
             fi
-        else
-            print_error "Failed to download Neovim"
-            return 1
-        fi
-    fi
+            ;;
+    esac
 }
 
 # Install Starship prompt
@@ -270,9 +416,7 @@ install_starship() {
     
     if curl -sS https://starship.rs/install.sh | sh -s -- -y &>/dev/null; then
         print_success "Starship installed successfully!"
-        
-        # Create basic config
-        mkdir -p "$HOME/.config"
+        INSTALLED_PACKAGES+=("starship")
     else
         print_error "Failed to install Starship"
         return 1
@@ -347,6 +491,7 @@ install_special_tool() {
             print_step "Installing zoxide..."
             if [[ "$OS" == "debian" ]]; then
                 curl -sS https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | bash &>/dev/null
+                INSTALLED_PACKAGES+=("zoxide")
             else
                 install_package "zoxide"
             fi
@@ -358,6 +503,7 @@ install_special_tool() {
                 # Install from cargo
                 if command -v cargo &>/dev/null; then
                     cargo install eza &>/dev/null
+                    INSTALLED_PACKAGES+=("eza (cargo)")
                 else
                     print_warning "Need cargo to install eza. Install Rust first."
                 fi
@@ -370,8 +516,10 @@ install_special_tool() {
             print_step "Installing tldr..."
             if command -v npm &>/dev/null; then
                 sudo npm install -g tldr &>/dev/null
+                INSTALLED_PACKAGES+=("tldr (npm)")
             elif command -v pip3 &>/dev/null; then
                 pip3 install --user tldr &>/dev/null
+                INSTALLED_PACKAGES+=("tldr (pip)")
             else
                 print_warning "Need npm or pip to install tldr"
             fi
@@ -386,6 +534,7 @@ install_special_tool() {
                 tar xf lazygit.tar.gz lazygit
                 sudo install lazygit /usr/local/bin
                 rm -f lazygit.tar.gz lazygit
+                INSTALLED_PACKAGES+=("lazygit $lazygit_version")
             else
                 install_package "lazygit"
             fi
@@ -399,17 +548,17 @@ install_special_tool() {
                 curl -Lo delta.deb "https://github.com/dandavison/delta/releases/latest/download/git-delta_${delta_version#v}_amd64.deb" &>/dev/null
                 sudo dpkg -i delta.deb &>/dev/null
                 rm -f delta.deb
+                INSTALLED_PACKAGES+=("delta $delta_version")
             else
                 install_package "git-delta"
             fi
-            git config --global core.pager "delta"
-            git config --global interactive.diffFilter "delta --color-only"
             ;;
             
         mcfly)
             print_step "Installing mcfly..."
             if [[ "$OS" == "debian" ]]; then
                 curl -LSfs https://raw.githubusercontent.com/cantino/mcfly/master/ci/install.sh | sh -s -- --git cantino/mcfly &>/dev/null
+                INSTALLED_PACKAGES+=("mcfly")
             else
                 if [[ -n "$AUR_HELPER" ]]; then
                     install_aur_package "mcfly"
@@ -421,6 +570,7 @@ install_special_tool() {
             print_step "Installing navi..."
             if command -v cargo &>/dev/null; then
                 cargo install navi &>/dev/null
+                INSTALLED_PACKAGES+=("navi (cargo)")
             else
                 print_warning "Need cargo to install navi. Install Rust first."
             fi
@@ -430,6 +580,7 @@ install_special_tool() {
             print_step "Installing broot..."
             if command -v cargo &>/dev/null; then
                 cargo install broot &>/dev/null
+                INSTALLED_PACKAGES+=("broot (cargo)")
             else
                 print_warning "Need cargo to install broot. Install Rust first."
             fi
@@ -441,6 +592,7 @@ install_special_tool() {
                 curl -LO https://github.com/ClementTsang/bottom/releases/download/0.9.6/bottom_0.9.6_amd64.deb &>/dev/null
                 sudo dpkg -i bottom_0.9.6_amd64.deb &>/dev/null
                 rm -f bottom_0.9.6_amd64.deb
+                INSTALLED_PACKAGES+=("bottom 0.9.6")
             else
                 install_package "bottom"
             fi
@@ -516,6 +668,7 @@ install_categories() {
                     if confirm "Install Rust via rustup (recommended)?"; then
                         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
                         source "$HOME/.cargo/env"
+                        INSTALLED_PACKAGES+=("rust (rustup)")
                     else
                         install_from_list "${PACKAGES_RUST[$OS]}"
                     fi
@@ -604,6 +757,24 @@ install_special_tools_menu() {
     fi
 }
 
+# Print installation summary
+print_summary() {
+    print_header "Installation Summary"
+    
+    if [[ ${#INSTALLED_PACKAGES[@]} -eq 0 ]]; then
+        print_info "No packages were installed."
+    else
+        print_success "Successfully installed ${#INSTALLED_PACKAGES[@]} packages:"
+        echo
+        for pkg in "${INSTALLED_PACKAGES[@]}"; do
+            echo "  • $pkg"
+        done
+    fi
+    
+    echo
+    print_info "Log file: $LOG_FILE"
+}
+
 # Main menu
 show_main_menu() {
     clear
@@ -649,7 +820,13 @@ quick_install() {
         update_packages
         
         # Install categories
-        install_categories "1,3,4,11,12"
+        install_categories "1,3,4"
+        
+        # Install Neovim without prompting
+        install_neovim_quick
+        
+        # Install Starship
+        install_starship
         
         # Install some special tools
         for tool in zoxide eza tldr lazygit delta; do
@@ -657,6 +834,74 @@ quick_install() {
         done
         
     fi
+}
+
+# Quick Neovim install (no prompts)
+install_neovim_quick() {
+    print_header "Installing Neovim (Latest Version)"
+    
+    # Get latest version
+    local latest_version
+    latest_version=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4)
+    
+    if [[ -z "$latest_version" ]]; then
+        print_error "Could not fetch latest version"
+        return 1
+    fi
+    
+    print_info "Installing Neovim $latest_version"
+    
+    case "$OS" in
+        debian)
+            # Use tarball method for quick install
+            print_step "Installing Neovim via tarball..."
+            local temp_dir="$TEMP_DIR/neovim"
+            mkdir -p "$temp_dir"
+            
+            local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"
+            
+            if curl -Lo "$temp_dir/nvim-linux-x86_64.tar.gz" "$download_url" && [[ -s "$temp_dir/nvim-linux-x86_64.tar.gz" ]]; then
+                cd "$temp_dir"
+                tar xzf nvim-linux-x86_64.tar.gz
+                
+                # Find the extracted directory
+                local nvim_dir=$(find . -maxdepth 1 -type d -name "nvim-*" | head -n1)
+                
+                if [[ -n "$nvim_dir" && -d "$nvim_dir" ]]; then
+                    # Remove old installation if exists
+                    [[ -d "$HOME/.local/nvim" ]] && rm -rf "$HOME/.local/nvim"
+                    
+                    # Copy to local directory
+                    mkdir -p "$HOME/.local"
+                    cp -r "$nvim_dir" "$HOME/.local/nvim"
+                    
+                    # Create symlink in bin
+                    mkdir -p "$HOME/.local/bin"
+                    ln -sf "$HOME/.local/nvim/bin/nvim" "$HOME/.local/bin/nvim"
+                    
+                    cd - &>/dev/null
+                    rm -rf "$temp_dir"
+                    
+                    print_success "Neovim $latest_version installed"
+                    INSTALLED_PACKAGES+=("neovim $latest_version (tarball)")
+                else
+                    print_error "Failed to extract Neovim"
+                    return 1
+                fi
+            else
+                print_error "Failed to download Neovim"
+                return 1
+            fi
+            ;;
+            
+        arch)
+            if [[ -n "$AUR_HELPER" ]]; then
+                install_aur_package "neovim-git"
+            else
+                install_package "neovim"
+            fi
+            ;;
+    esac
 }
 
 # Main function
@@ -715,18 +960,12 @@ main() {
                 ;;
         esac
     done
-    
+   
     # Cleanup
     rm -rf "$TEMP_DIR"
     
-    echo
-    print_success "All done! 🎉"
-    print_info "Log file: $LOG_FILE"
-    echo
-    print_info "Don't forget to:"
-    echo "  • Run 'source ~/.bashrc' to load new settings"
-    echo "  • Log out and back in for group changes (docker)"
-    echo "  • Configure tools like fzf, zoxide, and starship"
+    # Print summary
+    print_summary
     echo
 }
 
