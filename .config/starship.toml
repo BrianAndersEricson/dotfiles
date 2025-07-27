@@ -1,6 +1,6 @@
 format = """
 [┌─](green)$time
-[│](green) $os$username$hostname$directory$git_branch$git_status
+[│](green) $os$username$hostname$directory$git_branch$git_status$python
 [└─$character](green)
 """
 
@@ -202,6 +202,8 @@ symbol = " "
 symbol = "󰏗 "
 
 [python]
+format = 'via [${symbol}${version}(\($virtualenv\))]($style) '
+style = "yellow bold"
 symbol = " "
 
 [rlang]
